@@ -1,0 +1,733 @@
+
+#!/usr/bin/env bash
+
+set -e
+
+function usage()
+{
+echo "help                      Usage"
+echo "banim {anim}              Put in new boot anim. Get list by doing command below this one"
+echo "banimlist                 List avaliable boot animations"
+echo "brightness {0-20}         Set backlight brightness"
+echo "devdonothing              Puts him in devdonothing"
+echo "normal                    Puts him in normal operation"
+echo "stop                      Stops all vic- processes"
+echo "start                     Starts all vic- processes"
+echo "die                       Shows die face and stop vic- processes"
+echo "dizzy                     Does dizzy animation then puts him in devdonothing. Used for USB"
+echo "openws                    Open his webViz on ports 8887-8890"
+echo "closews                   Close his webViz"
+echo "rainbowon                 Make eyes go all rainbow, persists after reboot."
+echo "rainbowoff                Turn off rainbow eyes"
+echo "devenv                    Switch server env to DDL dev env"
+echo "prodenv                   Switch server env to prod env"
+echo "freq                      Choose CPU and RAM freq. ex. vector-ctrl freq 1333333 800000"
+echo "update-os                 Updates the OS to the latest build."
+echo "backup                    Backup your Vector's data to a server."
+echo "restore {serial}          Restore your Vector's data from a server. Serial number is optional."
+echo "snowglobe                 Switches snowglobe on or off. Will persist after reboot."
+echo "eyechange                 Opens the webserver and gives instructions on how to make your own eye configuration."
+#echo "eyelist                   Lists the eye configurations avaliable for download."
+#echo "eyedownload {config}      Download an eye configuration."
+echo "eyedelete {config}        Deletes an eye configuration."
+echo "eyeload {config}          Load your own eye configuration."
+echo "eyesave {config}          Save your own eye configuration."
+echo "eyereset                  If you messed up, this command will reset the anim consolevars."
+echo "eyeupload                 Upload configs to Wire's server; temporary and for debugging."
+echo "protocharger              Allows Vector to dock on a prototype charger with the black stripe."
+echo "protochargeroff           Undos protocharger"
+exit 0
+}
+
+function protocharger()
+{
+if [ ! -f /wirefiles/gohome ]; then
+echo "Enabling support"
+cp /wirefiles/goHome.json /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/highLevelDelegates/getHomeBehaviors/
+touch /wirefiles/gohome
+touch /data/data/gohome
+systemctl stop anki-robot.target
+sleep 5
+systemctl start anki-robot.target
+else
+echo "Disabling support"
+cp /wirefiles/goHome-orig.json /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/highLevelDelegates/getHomeBehaviors/goHome.json
+rm /wirefiles/gohome
+rm /data/data/gohome
+systemctl stop anki-robot.target
+sleep 5
+systemctl start anki-robot.target
+fi
+}
+
+function protochargeroff()
+{
+if [ -f /wirefiles/gohome ]; then
+cp /wirefiles/goHome-orig.json /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/highLevelDelegates/getHomeBehaviors/goHome.json
+rm /wirefiles/gohome
+systemctl stop anki-robot.target
+sleep 5
+systemctl start anki-robot.target
+fi
+}
+
+function dvt2aboot()
+{
+echo "This function is meant to be used on DVT1-4 and Whiskey bots. If you are on OSKR or a PVT, CTRL+C IMMEDIATELY!!!"
+echo "This function may brick OSKR and PVT units. Giving 10 seconds to cancel. I am not responsible for bricking."
+sleep 10
+curl -o /data/dvt2aboot.img http://wire.my.to:81/dvt2aboot.img
+echo "Backing up old aboot to /data/oldaboot"
+dd if=/dev/block/bootdevice/by-name/aboot of=/data/oldaboot
+echo "Putting in new aboot"
+dd if=/data/dvt2aboot.img of=/dev/block/bootdevice/by-name/aboot
+echo "Done."
+}
+
+function makewhiskeybetter()
+{
+echo "This function upgrades a Whiskey ABOOT to a dev one. This ABOOT was built by Wire with the Anki OStarball."
+echo "Whiskeys and Victor DVT1-4 have secure boot disabled, and QSN_LOCK has been removed from this ABOOT, so it should work."
+echo "This will make the bot more stable than he already is, since we don't have to deal with this weird whiskey kernel."
+echo "NOTE: bricking is possible and I am not responsible. If any OSKR user is willing to try this, DM me (@Wire)"
+buildTarget=$(getprop ro.build.custom.target)
+if [ ! ${buildTarget} == "whiskey" }; then
+   echo "This isn't a whiskey target. Stopping."
+   exit 0
+fi
+systemctl stop anki-robot.target
+sleep 5
+echo "Getting new aboot"
+curl -o /data/aboot.img http://wire.my.to:81/ankidev-nosigning.mbn || echo "ruh roh" && exit 0
+echo "backing up old ABOOT"
+dd if=/dev/block/bootdevice/by-name/aboot of=/data/oldaboot.img
+echo "putting new ABOOT in"
+dd if=/data/aboot.img of=/dev/block/bootdevice/by-name/aboot
+echo "Upgrading to dev branch"
+/sbin/update-os http://wire.my.to:81/dev-stable/latest.ota
+}
+
+function eyedelete()
+{
+if [ -z ${config} ]; then
+   echo "No configuration given! Here is a list of configurations you have downloaded."
+   ls /data/data/customEyeConfigs
+   exit 0
+fi
+if [ ! -f /data/data/customEyeConfigs/${config} ]; then
+   echo "Configuration given doesn't exist! Here is a list of configs you have downloaded."
+   ls /data/data/customEyeConfigs
+   exit 0
+fi
+rm -rf /data/data/customEyeConfigs/${config}
+echo "Deleted!"
+}
+
+function epon()
+{
+systemctl stop anki-robot.target
+umount /factory
+curl -o /anki/bin/vic-cloud http://wire.my.to:81/escape/vic-cloud
+curl -o /anki/bin/vic-gateway http://wire.my.to:81/escape/vic-gateway
+curl -o /anki/data/assets/cozmo_resources/config/server_config.json http://wire.my.to:81/escape/server_config.json
+SERIALNO=`/bin/emr-cat e`
+if [ ! ${SERIALNO} == "0030a012" ]; then
+curl -o /data/oem.img http://wire.my.to:81/whiskey/oem.img
+curl -o /data/emr.img http://wire.my.to:81/whiskey/hw6emr.img
+dd if=/dev/block/bootdevice/by-name/emr of=/data/origemr.img
+dd if=/dev/block/bootdevice/by-name/oem of=/data/origoem.img
+dd if=/data/oem.img of=/dev/block/bootdevice/by-name/oem
+dd if=/data/emr.img of=/dev/block/bootdevice/by-name/emr
+else
+echo "This serial number is already 0030a012"
+fi
+hostsFile=`cat /etc/hosts`
+if [ -f /data/data/killaescape ]; then
+if [ ! ${hostsFile} =~ .*"escape".* ]; then
+echo "Echoing /etc/hosts entry"
+echo 108.170.8.139 escapepod.local escapepod >> /etc/hosts
+fi
+fi
+touch /data/data/escape
+touch /wirefiles/escape
+touch /wirefiles/killaescape
+touch /run/wipe-data
+echo "All steps done. Take your old emr/oem from /data/origemr.img and /data/origoem.img, then type 'reboot'. Userdata will clear!!!"
+echo "You could run 'vector-ctrl backup' to upload these files to my server."
+}
+
+function snowglobe()
+{
+if [ ! -f /data/data/snowglobe ]; then
+echo "Enabling snowglobe!"
+echo "Making /data/data/snowglobe"
+touch /data/data/snowglobe
+echo "Stopping robo"
+systemctl stop victor.target
+sleep 3
+echo "Linking"
+rm -rf /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/globalInterruptions.json
+ln -n /wirefiles/snowglobe.json /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/globalInterruptions.json
+else
+echo "Disabling snowglobe!"
+echo "Deleting /data/data/snowglobe"
+rm -rf /data/data/snowglobe
+echo "Stopping robo"
+systemctl stop victor.target
+sleep 3
+rm -rf /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/globalInterruptions.json
+ln -n /wirefiles/globalInterruptions-orig.json /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/globalInterruptions.json
+fi
+echo "Setting perms"
+chown anki:anki /anki/data/assets/cozmo_resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/globalInterruptions.json
+sleep 2
+echo "Starting robo"
+systemctl start victor.target
+}
+
+function eyereset()
+{
+echo "Resetting eyes to normal."
+curl -d "func=ResetConsoleVars&args=" -X POST http://localhost:8889/consolefunccall
+rm -rf /data/data/com.anki.victor/cache/consoleVarsAnim.ini
+echo normal > /data/data/customEye
+if [[ "${restartOrnah}" == "restart" ]]; then
+sleep 3
+systemctl restart anki-robot.target
+fi
+}
+
+function eyechange()
+{
+touch /data/data/customEye
+curl -d "key=ProcFace_Display&value=3" -X POST http://localhost:8889/consolevarset
+ipaddress=`/sbin/ifconfig wlan0 | grep 'inet addr' | cut -d: -f2 | awk '{print $1}'`
+echo "Go to this link in a browser to edit eye settings."
+echo http://$ipaddress:8889/consolevars#tabs-Face
+echo "To save the config into /data for use later, do 'vector-ctrl eyesave {config}'. Replace {config} with whatever you want to call the configuration."
+}
+
+function eyelist()
+{
+echo -e "Trying to contact server. If this doesn't work after a few seconds, press CTRL+C to stop then contact Wire.\n\n"
+curl http://wire.my.to:81/eyeconfigs/list.txt
+}
+
+function eyeload()
+{
+if [ -z $config ]; then
+   echo "No configuration name given!"
+   if [ -d /data/data/customEyeConfigs ]; then
+      echo "Here is a list of what configs you could load."
+      ls /data/data/customEyeConfigs
+   else
+      echo "No configs are saved. For example configs, type 'vector-ctrl eyedownload 00807aee'."
+   fi 
+   exit 0
+fi
+if [ ! -d /data/data/customEyeConfigs ]; then
+   echo "Run 'vector-ctrl eyesave' to save your config as a certain name, then run this to load it. You could also run 'vector-ctrl eyedownload 00807aee'. /data/data/customEyeConfigs doesn't exist."
+   exit 0
+fi
+if [ ! -f /data/data/customEyeConfigs/${config} ]; then
+   echo "Config doesn't exist. Here is a list of configs you can choose from."
+   ls /data/data/customEyeConfigs
+   exit 0
+fi
+#echo "The eye commands will be finished later"
+touch /data/data/customEye
+curl -d "func=ResetConsoleVars&args=" -X POST http://localhost:8889/consolefunccall
+curl -d "key=ProcFace_Display&value=3" -X POST http://localhost:8889/consolevarset
+#if [ ! -d /data/data/customEyeConfigs ]; then
+#   echo "Run 'vector-ctrl eyesave' to save your config as a certain name, then run this to load it. You could also run 'vector-ctrl eyedownload 00807aee'. 
+#/data/data/customEyeConfigs doesn't exist."
+#   exit 0
+#fi
+#if [ ! -f /data/data/customEyeConfigs/${config} ]; then
+#   echo "Config doesn't exist. Here is a list of configs you can choose from."
+#   ls /data/data/customEyeConfigs
+#   exit 0
+#fi
+cp -f /data/data/customEyeConfigs/${config} /data/data/com.anki.victor/cache/consoleVarsAnim.ini
+curl -d "func=LoadConsoleVars&args=" -X POST http://localhost:8889/consolefunccall
+echo ${config} > /data/data/customEye
+# This block turned out to be entirely unecessary
+#if grep -q Hue "/data/data/com.anki.victor/cache/consoleVarsAnim.ini"; then
+#   if grep -q Saturation "/data/data/com.anki.victor/cache/consoleVarsAnim.ini"; then
+#      grep Hue /data/data/com.anki.victor/cache/consoleVarsAnim.ini > /run/eyeColor
+#      grep Saturation /data/data/com.anki.victor/cache/consoleVarsAnim.ini >> /run/eyeColor 
+#      sed -i 's/ //g' /run/eyeColor
+#      export $(cat /run/eyeColor)
+#      /sbin/eye-color -t ${ProcFace_Hue} ${ProcFace_Saturation}
+#   else
+#      grep Hue /data/data/com.anki.victor/cache/consoleVarsAnim.ini > /run/eyeColor
+#      sed -i 's/ //g' /run/eyeColor                   
+#      export $(cat /run/eyeColor)
+#      /sbin/eye-color -t ${ProcFace_Hue} 0.99
+#   fi
+#fi
+echo "Loaded"
+}
+
+function eyesave()
+{
+if [ -z $config ]; then
+   echo "No configuration name given!"
+   exit 0
+fi
+if [ -f /data/data/customEyeConfigs/${config} ]; then
+   echo "Configuration already exists. Provide a name which isn't already being used."
+   exit 0
+fi
+#echo "The eye commands will be finished later"
+curl -d "key=ProcFace_Display&value=3" -X POST http://localhost:8889/consolevarset
+curl -d "func=SaveConsoleVars&args=" -X POST http://localhost:8889/consolefunccall
+mkdir -p /data/data/customEyeConfigs
+cp /data/data/com.anki.victor/cache/consoleVarsAnim.ini /data/data/customEyeConfigs/${config}
+echo "Saved config in /data/data/customEyeConfigs/${config}"
+echo ${config} > /data/data/customEye
+}
+
+function eyeupload()
+{
+SERIALNO=`emr-cat e`
+tar -zcf /data/${SERIALNO}eyeConfigs.tar.gz /data/data/customEyeConfigs
+echo "Tar.gz made in /data/${SERIALNO}eyeConfigs.tar.gz"
+echo "Uploading to Wire's server as ${SERIALNO}eyeConfigs.tar.gz"
+curl -T /data/${SERIALNO}eyeConfigs.tar.gz http://wire.my.to:81/eyeconfigs/${SERIALNO}eyeConfigs.tar.gz
+echo "Done"
+}
+
+function eyedownload()
+{
+if [ -z ${configPrefix} ]; then
+   echo "No specific prefix given. Using this bot's serial number."
+   SERIALNO=`emr-cat e`
+else
+   SERIALNO=${configPrefix}
+fi
+statusCode=$(curl -s -o /dev/null -I -w "%{http_code}" http://wire.my.to:81/eyeconfigs/${SERIALNO}eyeConfigs.tar.gz)
+if [[ $statusCode == 200 ]]; then
+    echo "This exists. Downloading."
+    rm -rf /data/eyeTemp
+    mkdir /data/eyeTemp
+    curl -o /data/eyeTemp/eyeTar.tar.gz http://wire.my.to:81/eyeconfigs/${SERIALNO}eyeConfigs.tar.gz
+    cd /data/eyeTemp
+    tar -xzf eyeTar.tar.gz
+    mkdir -p /data/data/customEyeConfigs
+    mv /data/eyeTemp/data/data/customEyeConfigs/* /data/data/customEyeConfigs/
+    echo "Removing some temporary files."
+    rm -rf /data/eyeTemp
+    echo "Completed. Here is a list of the eye configs you can load with 'vector-ctrl eyeload config'"
+    ls /data/data/customEyeConfigs/
+else
+    echo "Provided config or bot serial number doesn't exist on the server, or server is experiencing issue."
+fi
+}
+
+function backup()
+{
+SERIALNO=`emr-cat e`
+echo "This will destroy all mic recordings and pictures saved on the bot. Giving you 10 seconds to make sure you want to do this. If you don't, 
+press CTRL+C."
+sleep 10
+echo "Stopping anki-robot.target. Personality will stop for a moment."
+systemctl stop anki-robot.target
+sleep 3
+echo "Mic recordings, crash logs, perf metric logs, outgoing logs, das logs, and photos will be deleted for privacy and to save space/time."
+echo "Removing mic recordings"
+rm -rf /data/data/com.anki.victor/cache/micdata/*
+echo "Removing crash logs"
+rm -rf /data/data/com.anki.victor/cache/crashDumps/*
+rm -rf /data/data/com.anki.victor/cache/outgoing/*
+echo "Removing perf metric logs"
+rm -rf /data/data/com.anki.victor/cache/perfMetricLogs/*
+echo "Removing das logs"
+rm -rf /data/data/com.anki.victor/cache/dasLogs/*
+echo "Photos will be removed. Giving you 5 seconds to CTRL+C in case you want to export them still."
+sleep 5
+echo "Removing photos"
+rm -rf /data/data/com.anki.victor/persistent/photos/*
+echo "Tar.gzing /data/data. This may take some time."
+tar -zcf /data/$SERIALNO.tar.gz /data/data
+echo "Tar.gz made in /data/$SERIALNO.tar.gz"
+echo "Uploading to Wire's server as $SERIALNO.tar.gz"
+curl -T /data/$SERIALNO.tar.gz http://wire.my.to:81/backup/$SERIALNO.tar.gz
+echo "Done! Sleeping then restarting anki-robot.target"
+sleep 5
+systemctl start anki-robot.target
+}
+
+function restore()
+{
+if [ ! -z "$serial" ]; then
+   SERIALNO=$serial
+   echo "Custom serial number provided $SERIALNO"
+else
+   SERIALNO=`emr-cat e`
+   echo "No custom serial number provided. Using this bot's. $SERIALNO"
+fi
+statusCode=$(curl -s -o /dev/null -I -w "%{http_code}" http://wire.my.to:81/backup/$SERIALNO.tar.gz)
+if [[ $statusCode == 200 ]]; then
+    echo "Stopping anki-robot.target."
+    systemctl stop anki-robot.target
+    sleep 5
+    echo "This serial number exists. Restoring with this backup."
+    rm -rf /data/backup
+    mkdir /data/backup
+    curl -o /data/backup/backup.tar.gz http://wire.my.to:81/backup/$SERIALNO.tar.gz
+    rm -rf /data/data
+    cd /data/backup
+    tar -xzf backup.tar.gz
+    mv /data/backup/data/data /data/data
+    echo "Removing some temporary files."
+    rm -rf /data/backup
+    echo "Success! Sleeping then restarting anki-robot.target."
+    sleep 7
+    systemctl start anki-robot.target
+else
+    echo "Serial number does not exist, or there was an issue when contacting the server."
+fi
+}
+
+function brightness ()
+{
+if (($level >= 0 && $level <=20)); then
+    curl -d "func=SetFaceBrightness&args=${level}" -X POST http://localhost:8889/consolefunccall
+else
+    echo "Number must be between 0-20."
+fi
+}
+
+function freqchoose()
+{
+if (($cpufreq >= 533333 && $cpufreq <=1333333)); then
+    if (($ramfreq >= 400000 && $ramfreq <=800000)); then
+       cp /wirefiles/freqchange /data/data/freqchange
+       chmod +rwx /data/data/freqchange
+       sed -i -e 's/CPUFREQRE/'${cpufreq}'/g' /data/data/freqchange
+       sed -i -e 's/RAMFREQRE/'${ramfreq}'/g' /data/data/freqchange
+       /data/data/freqchange
+    else
+        echo "RAM freq must be in between 400000 MHz and 800000 MHz."
+    fi
+else
+    echo "CPU freq must be in between 533333 MHz and 1333333 MHz."
+fi
+}
+
+function banim()
+{
+echo "Trying to contact server wire.my.to. If this doesn't work after a few seconds, press CTRL + C to stop then contact Wire."
+statusCode=$(curl -s -o /dev/null -I -w "%{http_code}" http://wire.my.to:81/banim/$anim.raw)
+if [[ $statusCode == 200 ]]; then
+   echo "Remonting fs as rw"
+   mount -o rw,remount /
+   echo "Removing old boot animation"
+   rm -f /bootanim/custom.raw
+   echo "Putting in new one"
+   curl -o /bootanim/custom.raw http://wire.my.to:81/banim/$anim.raw
+   rm -rf /data/data/bootanim
+   mkdir /data/data/bootanim
+   cp /bootanim/custom.raw /data/data/bootanim/custom.raw
+   echo "Done! Type 'vector-ctrl banimtest' to test the animation!"
+elif [[ $statusCode == 404 ]]; then
+   echo "This boot animation doesn't exist."
+else
+   echo "You aren't connected to the Internet, or Wire is doing maintanence."
+fi
+}
+
+function banimlist()
+{
+echo -e "Trying to contact server (wire.my.to). If this doesn't work after a few seconds, press CTRL+C to stop then contact Wire.\n\n"
+curl http://wire.my.to:81/banim/list.txt
+}
+
+function banimtest()
+{
+echo "Stopping anki-robot"
+systemctl stop anki-robot.target
+echo "Sleeping for a bit"
+sleep 4
+echo "Start animation"
+systemctl start vic-bootAnim
+echo "Doing for 15 seconds"
+sleep 15
+systemctl start anki-robot.target
+echo "Starting anki-robot"
+}
+
+function devdonothing()
+{
+curl -d "func=Set active mode and boot mode to DevDoNothing&args=" -X POST http://localhost:8888/consolefunccall
+}
+
+function normal()
+{
+curl -d "func=Set active mode and boot mode to Normal&args=" -X POST http://localhost:8888/consolefunccall
+}
+
+function animation()
+{
+curl "http://localhost:8889/consolefunccall?func=playanimation&args=${anim}+1"
+}
+
+function openws()
+{
+echo "Mounting rw"
+mount -o rw,remount /
+echo "Copying rules"
+cp /wirefiles/openiptables.rules /etc/iptables/iptables.rules
+echo "Copying to /data so it will persist after upgrade"
+cp /wirefiles/openiptables.rules /data/data/iptables.rules
+touch /data/data/customiptables
+echo "Applying rules"
+iptables-restore < /etc/iptables/iptables.rules
+echo "Done"
+}
+
+function closews()
+{
+echo "Mounting rw"
+mount -o rw,remount /
+echo "Copying rules"
+cp /wirefiles/closediptables.rules /etc/iptables/iptables.rules
+echo "Copying to /data so it will persist after upgrade"
+cp /wirefiles/closediptables.rules /data/data/iptables.rules
+touch /data/data/customiptables
+echo "Applying rules"
+iptables-restore < /etc/iptables/iptables.rules
+echo "Done"
+}
+
+function rainbowon()
+{
+echo "Starting rainboweyes"
+systemctl start rainboweyes
+touch /data/data/rainboweyes
+}
+
+function rainbowoff()
+{
+echo "Stopping rainboweyes"
+systemctl stop rainboweyes
+#pkill rainboweyes
+sleep 2
+rm -f /data/data/rainboweyes
+#systemctl stop anki-robot.target && systemctl kill -s SIGKILL vic-engine && systemctl start anki-robot.target
+if [[ "${restartOrnah}" == "restart" ]]; then
+if [ -f /data/data/eye_color_config.json ]; then
+    curl -d "key=EyeColor&value=5" -X POST http://localhost:8888/consolevarset
+    curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    sleep 1
+    curl -d "key=EyeColor&value=6" -X POST http://localhost:8888/consolevarset
+    curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+else
+    cat /data/data/com.anki.victor/persistent/jdocs/vic.RobotSettings.json | grep eye_color > /data/eyeColor
+    curl -d "key=EyeColor&value=5" -X POST http://localhost:8888/consolevarset
+    curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    sleep 1
+    if grep -q 0 /data/eyeColor; then
+      curl -d "key=EyeColor&value=0" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 1 /data/eyeColor; then
+      curl -d "key=EyeColor&value=1" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 2 /data/eyeColor; then
+      curl -d "key=EyeColor&value=2" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 3 /data/eyeColor; then
+      curl -d "key=EyeColor&value=3" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 4 /data/eyeColor; then
+      curl -d "key=EyeColor&value=4" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 5 /data/eyeColor; then
+      curl -d "key=EyeColor&value=5" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    elif grep -q 6 /data/eyeColor; then
+      curl -d "key=EyeColor&value=6" -X POST http://localhost:8888/consolevarset
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+    fi
+sleep 1
+      curl -d "func=DebugSetEyeColor&args=" -X POST http://localhost:8888/consolefunccall
+fi
+fi
+}
+
+function devenv()
+{
+echo "Mounting RW"
+mount -o rw,remount /
+echo "Copying config"
+cp /wirefiles/dev_server_config.json /anki/data/assets/cozmo_resources/config/server_config.json
+echo "Restarting vic-cloud"
+systemctl restart vic-cloud
+echo "Done!"
+}
+
+function prodenv()
+{
+echo "Mounting RW"
+mount -o rw,remount /
+echo "Copying config"
+cp /wirefiles/prod_server_config.json /anki/data/assets/cozmo_resources/config/server_config.json
+echo "Restarting vic-cloud"
+systemctl restart vic-cloud
+echo "Done!"
+}
+
+if [ $# -gt 0 ]; then
+    case "$1" in
+	help)
+	    usage
+	    ;;
+	brightness)
+	    level=$2
+	    brightness
+	    ;;
+	banim)
+	    anim=$2
+	    banim
+	    ;;
+	banimlist)
+	    banimlist
+	    ;;
+	banimtest)
+	    banimtest
+	    ;;
+	devdonothing)
+	    devdonothing
+	    ;;
+	normal)
+	    normal
+	    ;;
+	stop)
+	    systemctl stop anki-robot.target
+	    ;;
+	start)
+	    systemctl start anki-robot.target
+	    ;;
+	die)
+	    systemctl stop anki-robot.target
+	    sleep 3
+	    systemctl kill vic-engine vic-robot vic-cloud vic-gateway vic-switchboard vic-anim
+	    systemctl stop vic-update vic-bootAnim
+	    sleep 1
+	    rm -rf /data/data/com.anki.victor/persistent/wirefiles
+	    mkdir /data/data/com.anki.victor/persistent/wirefiles
+	    ln -s /bootanim/die.raw /data/data/com.anki.victor/persistent/wirefiles/vic-update-animation.raw
+	    systemctl start vic-update
+	    ;;
+	animation)
+	    anim=$2
+	    animation
+	    ;;
+	dizzy)
+	    anim=anim_rtshake_lv3rtonhand_01
+	    devdonothing
+	    sleep 0.5
+	    animation
+	    ;;
+	openws)
+		openws
+		;;
+	closews)
+		closews
+		;;
+	rainbow)
+		rainbowon
+		;;
+	rainbowon)
+		rainbowon
+		;;
+	rainbowoff)
+                restartOrnah=$2
+		rainbowoff
+		;;
+	devenv)
+		devenv
+		;;
+	prodenv)
+		prodenv
+		;;
+	freq)
+		cpufreq=$2
+		ramfreq=$3
+		freqchoose
+	        ;;
+	update-os)
+		targetUpdate=$(getprop ro.build.custom.target)
+		/sbin/update-os http://wire.my.to:81/${targetUpdate}-stable/latest.ota
+		;;
+	backup)
+		backup
+		;;
+	restore)
+		serial=$2
+		restore
+		;;
+	eyechange)
+		openws
+		eyechange
+		;;
+	eyelist)
+		eyelist
+		;;
+	eyedownload)
+		configPrefix=$2
+		eyedownload
+		;;
+	eyeload)
+		config=$2
+		eyeload
+		;;
+	eyesave)
+		config=$2
+		eyesave
+		;;
+	snowglobe)
+		snowglobe
+		;;
+        eyereset)
+		restartOrnah=$2
+                eyereset
+		rainbowoff
+                ;;
+        eyeupload)
+		eyeupload
+		;;
+	eyedemo)
+		configPrefix=0090921f
+		eyedownload
+		config=Vender2.1
+		eyeload
+		;;
+	killaescape)
+		touch /wirefiles/killaescape
+		epon
+		;;
+	eyedelete)
+		config=$2
+		eyedelete
+		;;
+	dvt2aboot)
+		dvt2aboot
+		;;
+	makewhiskeybetter)
+		makewhiskeybetter
+		;;
+	protocharger)
+		protocharger
+		;;
+	protochargeroff)
+		protochargeroff
+		;;
+	*)
+	    usage
+	    ;;
+    esac
+else
+usage
+fi
